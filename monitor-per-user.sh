@@ -2,7 +2,7 @@ own=$(id -nu)
 cpus=$(lscpu | grep "^CPU(s):" | awk '{print $2}')
 
 # System total CPU usage
-top -b -n 1 | awk 'NR == 3 { print "system " 100-$8 }'
+top -b -n 1 | awk -F'[,[:blank:]]+' 'NR == 3 { print "system " 100-$8 }'
 
 for user in $(who | awk '{print $1}' | sort -u)
 do

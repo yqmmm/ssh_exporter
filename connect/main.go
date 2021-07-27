@@ -155,7 +155,6 @@ func execute(cred []*CredentialConfig) []*Result {
 				Output: string(out),
 				Loads:  nil,
 			}
-			// results = append(results, &result)
 
 			session.Close()
 			client.Close()
