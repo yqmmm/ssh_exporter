@@ -6,7 +6,9 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 	"gopkg.in/yaml.v2"
@@ -17,6 +19,15 @@ var conf Config
 func Check(e error) {
 	if e != nil {
 		log.Fatal(e)
+	}
+}
+
+func SoftCheck(e error) bool {
+	if e != nil {
+		log.Printf("Soft error: %v", e)
+		return true
+	} else {
+		return false
 	}
 }
 
@@ -63,7 +74,6 @@ func ParseArgs() string {
 }
 
 func getKeyFile(keyfile string) ssh.Signer {
-	log.Printf("Using keyfile: %s", keyfile)
 	buf, err := ioutil.ReadFile(keyfile)
 	Check(err)
 
@@ -82,6 +92,7 @@ func Connect(host, user, keyfile string) (*ssh.Client, *ssh.Session, error) {
 			ssh.PublicKeys(key),
 		},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout:         5 * time.Second,
 	}
 	sshConfig.SetDefaults()
 
@@ -105,6 +116,10 @@ func parseResult(r *Result) {
 	lines := strings.Split(strings.TrimSpace(output), "\n")
 	for _, l := range lines {
 		parts := strings.Fields(l)
+		if len(parts) < 2 {
+			log.Printf("Invalid result line: %s", l)
+			continue
+		}
 		user := parts[0]
 		load := parts[1]
 		r.Loads[user] = load
@@ -127,6 +142,9 @@ func formatResult(r *Result) string {
 
 func formatResults(r []*Result) string {
 	response := ""
+	sort.Slice(r, func(i, j int) bool {
+		return r[i].Config.Host < r[j].Config.Host
+	})
 	for _, r := range r {
 		response = fmt.Sprintf("%s%s", response, formatResult(r))
 	}
@@ -138,19 +156,24 @@ func execute(cred []*CredentialConfig) []*Result {
 	script, err := ioutil.ReadFile(conf.Script)
 	Check(err)
 
-	// TODO: Spawn goroutine
 	rc := make(chan *Result)
 	for _, c := range cred {
 		go func(c *CredentialConfig) {
 			log.Printf("Connecting to %s", c.Host)
 
 			client, session, err := Connect(c.Host, c.User, c.KeyFile)
-			Check(err)
+			if SoftCheck(err) {
+				rc <- nil
+				return
+			}
 
 			out, err := session.CombinedOutput(string(script))
-			Check(err)
+			if SoftCheck(err) {
+				rc <- nil
+				return
+			}
 
-			result := Result{
+			rc <- &Result{
 				Config: c,
 				Output: string(out),
 				Loads:  nil,
@@ -158,14 +181,15 @@ func execute(cred []*CredentialConfig) []*Result {
 
 			session.Close()
 			client.Close()
-
-			rc <- &result
 		}(c)
 	}
 
 	var results []*Result
 	for i := 0; i < len(cred); i++ {
-		results = append(results, <-rc)
+		res := <-rc
+		if res != nil {
+			results = append(results, res)
+		}
 	}
 
 	return results
